@@ -1,18 +1,19 @@
+from sqlalchemy.orm import Session
+from domain.repositories.invoice_repository import InvoiceRepository
+from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
 import csv
 import io
-from sqlalchemy.orm import Session
-from infrastructure.database.models import Invoice
 
 def export_to_csv(db: Session):
     """Exporte toutes les factures en CSV"""
-    invoices = db.query(Invoice).all()
-    
+    repository: InvoiceRepository = SqlInvoiceRepository(db)
+    invoices = repository.list_all(limit=1000)
+
     output = io.StringIO()
     writer = csv.writer(output)
-    
-    # En-têtes
+
     writer.writerow(["ID", "Filename", "Status", "Supplier", "Invoice Number", "Date", "Total TTC"])
-    
+
     for inv in invoices:
         data = inv.extracted_data or {}
         writer.writerow([
@@ -24,23 +25,13 @@ def export_to_csv(db: Session):
             data.get("date", ""),
             inv.total_ttc or ""
         ])
-    
+
     return output.getvalue()
+
 
 def export_to_json(db: Session):
     """Exporte toutes les factures en JSON"""
-    invoices = db.query(Invoice).all()
-    result = []
-    for inv in invoices:
-        data = inv.extracted_data or {}
-        result.append({
-            "id": inv.id,
-            "filename": inv.filename,
-            "status": inv.status,
-            "supplier": data.get("supplier"),
-            "invoice_number": data.get("invoice_number"),
-            "date": data.get("date"),
-            "total_ttc": inv.total_ttc,
-            "validated_data": inv.validated_data
-        })
-    return result
+    repository: InvoiceRepository = SqlInvoiceRepository(db)
+    invoices = repository.list_all(limit=1000)
+
+    return [inv.to_dict() for inv in invoices]

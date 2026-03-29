@@ -1,26 +1,16 @@
+from typing import List
 from sqlalchemy.orm import Session
-from infrastructure.database.models import Invoice
+from domain.repositories.invoice_repository import InvoiceRepository
+from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
+from domain.entities.invoice import Invoice
 
-def search_invoices(db: Session, keyword: str = None, limit: int = 20):
-    """
-    Recherche intelligente - Version ultra stable
-    """
-    query = db.query(Invoice).order_by(Invoice.upload_date.desc()).limit(limit)
-    results = query.all()
-    
+def search_invoices(db: Session, keyword: str = None, limit: int = 20) -> List[dict]:
+    """Recherche des factures par mot-clé"""
+    repository: InvoiceRepository = SqlInvoiceRepository(db)
+
     if not keyword:
-        return results
-    
-    keyword = keyword.lower()
-    
-    # Filtrage en Python (beaucoup plus sûr avec SQLite)
-    filtered = []
-    for inv in results:
-        text_to_search = (
-            inv.filename.lower() + " " +
-            str(inv.extracted_data).lower()
-        )
-        if keyword in text_to_search:
-            filtered.append(inv)
-    
-    return filtered
+        results = repository.list_all(limit=limit)
+    else:
+        results = repository.search(keyword, limit=limit)
+
+    return [inv.to_dict() for inv in results]

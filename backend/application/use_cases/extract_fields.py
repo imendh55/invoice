@@ -1,8 +1,7 @@
 import re
 from datetime import datetime
 
-def safe_float(value: str) -> float | None:
-    """Convertit en float de manière sécurisée"""
+def safe_float(value: str):
     if not value:
         return None
     try:
@@ -11,6 +10,7 @@ def safe_float(value: str) -> float | None:
         return None
 
 def extract_fields(text: str) -> dict:
+    """Extrait les champs avec regex (version simple et stable)"""
     data = {
         "invoice_number": None,
         "supplier": None,
@@ -21,13 +21,13 @@ def extract_fields(text: str) -> dict:
         "raw_text": text[:500]
     }
 
-    # Numéro de facture
-    num_match = re.search(r'(?:Facture|N°|Numéro|N°\s*)\s*[:\-]?\s*([A-Z0-9\-]+)', text, re.I)
+    # Numéro facture
+    num_match = re.search(r'(?:Facture|N°|Numéro|N°\s*)[:\-]?\s*([A-Z0-9\-]+)', text, re.I)
     if num_match:
         data["invoice_number"] = num_match.group(1)
 
     # Fournisseur
-    supplier_match = re.search(r'(?:Fournisseur|Client|Émetteur|From)\s*[:\-]?\s*([^\n]{3,40})', text, re.I)
+    supplier_match = re.search(r'(?:Fournisseur|Client|Émetteur|From)[:\-]?\s*([^\n]{3,40})', text, re.I)
     if supplier_match:
         data["supplier"] = supplier_match.group(1).strip()
 
@@ -39,7 +39,7 @@ def extract_fields(text: str) -> dict:
         except:
             pass
 
-    # Montants (sécurisé maintenant)
+    # Montants
     ttc_match = re.search(r'(?:Total TTC|TOTAL TTC|Montant TTC|Total à payer)[:\s]*([0-9.,]+)', text, re.I)
     if ttc_match:
         data["total_ttc"] = safe_float(ttc_match.group(1))

@@ -4,9 +4,9 @@ from datetime import datetime
 
 Base = declarative_base()
 
-class Invoice(Base):
+class InvoiceModel(Base):
     __tablename__ = "invoices"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String, index=True)
     path = Column(String)
@@ -15,4 +15,12 @@ class Invoice(Base):
     extracted_data = Column(JSON, default={})
     validated_data = Column(JSON, default={})
     total_ttc = Column(Float, nullable=True)
-    feedback = Column(JSON, default={})          # ← NOUVEAU : corrections de l'utilisateur
+    feedback = Column(JSON, default={})
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
