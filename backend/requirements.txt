@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic-settings
+sqlalchemy
+python-jose[cryptography]
+passlib[bcrypt]
+pillow
+pytesseract
+opencv-python
+python-multipart
+
+
+
