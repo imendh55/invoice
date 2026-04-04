@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 from sqlalchemy import Column, Integer, String, Float, DateTime, Text, ForeignKey
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -7,12 +8,34 @@ import json
 
 
 # ====================== USER MODEL ======================
+=======
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Float
+from sqlalchemy.ext.declarative import declarative_base
+from datetime import datetime
+
+Base = declarative_base()
+
+class InvoiceModel(Base):
+    __tablename__ = "invoices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String, index=True)
+    path = Column(String)
+    upload_date = Column(DateTime, default=datetime.utcnow)
+    status = Column(String, default="uploaded")
+    extracted_data = Column(JSON, default={})
+    validated_data = Column(JSON, default={})
+    total_ttc = Column(Float, nullable=True)
+    feedback = Column(JSON, default={})
+
+>>>>>>> origin/main
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
+<<<<<<< HEAD
 
     nom = Column(String, nullable=True)
     prenom = Column(String, nullable=True)
@@ -86,3 +109,6 @@ class InvoiceModel(Base):
             "createdAt": self.created_at.isoformat() if self.created_at else None,
             "updatedAt": self.updated_at.isoformat() if self.updated_at else None,
         }
+=======
+    created_at = Column(DateTime, default=datetime.utcnow)
+>>>>>>> origin/main
