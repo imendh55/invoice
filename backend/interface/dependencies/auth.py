@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError, ExpiredSignatureError
 from core.config import get_settings
@@ -10,20 +10,20 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     if not credentials:
         raise HTTPException(status_code=401, detail="Token manquant")
 
-    if credentials.scheme.lower() != "bearer":
-        raise HTTPException(status_code=401, detail="Schéma invalide (Bearer requis)")
-
     try:
         payload = jwt.decode(
             credentials.credentials,
             settings.SECRET_KEY,
             algorithms=[settings.ALGORITHM]
         )
-        username = payload.get("sub")
-        if not username:
+        email = payload.get("sub")
+        if not email:
             raise HTTPException(status_code=401, detail="Token invalide")
-        return username
+        return email
     except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expiré")
     except JWTError:
         raise HTTPException(status_code=401, detail="Token invalide")
+
+# Alias
+get_current_user_email = get_current_user
