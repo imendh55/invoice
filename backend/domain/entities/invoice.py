@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Dict, Optional, Any
 
+
 class Invoice:
     """Entity pure métier - sans SQLAlchemy ni FastAPI"""
 
@@ -29,12 +30,37 @@ class Invoice:
         return bool(self.extracted_data.get("supplier") and self.total_ttc)
 
     def to_dict(self) -> Dict:
+        """
+        ✅ Format camelCase compatible avec le frontend Next.js.
+        Le frontend attend : fileName, extractedData, createdAt, etc.
+        """
+        raw = self.extracted_data or {}
+
+        # Construire extractedData au format attendu par le frontend
+        extracted_data_frontend = {
+            # Champs nommés par le frontend
+            "numeroFacture": raw.get("invoice_number") or raw.get("numeroFacture", ""),
+            "fournisseur":   raw.get("supplier")       or raw.get("fournisseur", ""),
+            "date":          raw.get("date", ""),
+            "totalHT":       raw.get("total_ht")       or raw.get("totalHT"),
+            "tva":           raw.get("total_tva")      or raw.get("tva"),
+            "totalTTC":      raw.get("total_ttc")      or raw.get("totalTTC") or self.total_ttc,
+            "adresseFournisseur": raw.get("adresseFournisseur", ""),
+            "client":        raw.get("client", ""),
+            "adresseClient": raw.get("adresseClient", ""),
+            "produits":      raw.get("produits", []),
+            # Conserver le texte brut OCR si présent
+            "rawText":       raw.get("raw_text", ""),
+        }
+
         return {
-            "id": self.id,
-            "filename": self.filename,
-            "status": self.status,
-            "extracted_data": self.extracted_data,
-            "validated_data": self.validated_data,
-            "total_ttc": self.total_ttc,
-            "upload_date": self.upload_date.isoformat() if self.upload_date else None,
+            # ✅ camelCase pour le frontend
+            "id":            self.id,
+            "fileName":      self.filename,
+            "filePath":      self.path,
+            "status":        self.status,
+            "extractedData": extracted_data_frontend,
+            "validatedData": self.validated_data or {},
+            "total_ttc":     self.total_ttc,           # gardé pour compat backend
+            "createdAt":     self.upload_date.isoformat() if self.upload_date else None,
         }

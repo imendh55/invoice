@@ -14,24 +14,8 @@ import {
 import { useAuth } from '@/lib/auth-context'
 import Link from 'next/link'
 
-// MODE DÉVELOPPEMENT
-const DEV_MODE = true
-const DEV_USER = {
-  prenom: 'Admin',
-  nom: 'Dev'
-}
-
 export function Header() {
   const { user, logout } = useAuth()
-  const currentUser = user || (DEV_MODE ? DEV_USER : null)
-
-  const handleLogout = () => {
-    if (DEV_MODE && !user) {
-      window.location.href = '/login'
-      return
-    }
-    logout()
-  }
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b bg-card px-6">
@@ -63,22 +47,30 @@ export function Header() {
                 <User className="h-4 w-4" />
               </div>
               <span className="hidden md:block text-sm font-medium">
-                {currentUser ? `${currentUser.prenom} ${currentUser.nom}` : 'Utilisateur'}
+                {user ? `${user.prenom} ${user.nom}` : 'Utilisateur'}
               </span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>Mon compte</DropdownMenuLabel>
+            <DropdownMenuLabel>
+              <div>
+                <p className="font-medium">{user?.prenom} {user?.nom}</p>
+                <p className="text-xs text-muted-foreground font-normal">{user?.email}</p>
+              </div>
+            </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
               <Link href="/dashboard/settings">Profil</Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
-              <Link href="/dashboard/settings">Parametres</Link>
+              <Link href="/dashboard/settings">Paramètres</Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleLogout} className="text-destructive cursor-pointer">
-              Deconnexion
+            <DropdownMenuItem
+              onClick={logout}
+              className="text-destructive cursor-pointer focus:text-destructive"
+            >
+              Déconnexion
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
