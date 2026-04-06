@@ -1,20 +1,12 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Upload, FileText, X, File, Loader2 } from 'lucide-react'
+import { Upload, FileText, X, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-context'
 import * as invoicesApi from '@/lib/api/invoices'
 import { toast } from 'sonner'
@@ -24,300 +16,151 @@ interface UploadedFile {
   name: string
   size: string
   date: string
-  status: 'uploading' | 'en_cours' | 'en_attente' | 'complete' | 'error'
+  status: 'uploading' | 'en_cours' | 'complete' | 'error'
   file?: File
-}
-
-const statusColors = {
-  uploading: 'bg-blue-500 text-white',
-  en_cours: 'bg-warning text-warning-foreground',
-  en_attente: 'bg-muted text-muted-foreground',
-  complete: 'bg-success text-success-foreground',
-  error: 'bg-destructive text-destructive-foreground',
-}
-
-const statusLabels = {
-  uploading: 'Upload...',
-  en_cours: 'En cours',
-  en_attente: 'En attente',
-  complete: 'Terminé',
-  error: 'Erreur',
 }
 
 export default function ImportPage() {
   const router = useRouter()
   const { token } = useAuth()
-  const [isDragging, setIsDragging] = useState(false)
-  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const [files, setFiles] = useState<UploadedFile[]>([])
   const [isUploading, setIsUploading] = useState(false)
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(true)
-  }, [])
+  console.log('📌 ImportPage chargée - token présent ?', !!token)
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-  }, [])
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-    
-    const files = Array.from(e.dataTransfer.files)
-    processFiles(files)
-  }, [])
-
-  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      const files = Array.from(e.target.files)
-      processFiles(files)
-    }
-  }, [])
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return bytes + ' B'
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-  }
-
-  const processFiles = (files: File[]) => {
-    const newFiles: UploadedFile[] = files.map((file, index) => ({
-      id: `local-${Date.now()}-${index}`,
-      name: file.name,
-      size: formatFileSize(file.size),
-      date: new Date().toLocaleDateString('fr-FR'),
-      status: 'en_attente' as const,
-      file: file,
-    }))
-    
-    setUploadedFiles(prev => [...newFiles, ...prev])
-  }
-
-  // Upload un fichier vers le backend
-  const uploadFile = async (localFile: UploadedFile) => {
-    if (!token || !localFile.file) return
-
-    // Mettre à jour le statut en "uploading"
-    setUploadedFiles(prev => 
-      prev.map(f => f.id === localFile.id ? { ...f, status: 'uploading' as const } : f)
-    )
-
-    try {
-      const response = await invoicesApi.uploadInvoice(localFile.file, token)
-      
-      // Remplacer le fichier local par la réponse du serveur
-      setUploadedFiles(prev => 
-        prev.map(f => f.id === localFile.id 
-          ? { 
-              ...f, 
-              id: response.id, 
-              status: 'en_attente' as const,
-              file: undefined 
-            } 
-          : f
-        )
-      )
-      
-      toast.success(`${localFile.name} uploadé avec succès`)
-    } catch (error) {
-      setUploadedFiles(prev => 
-        prev.map(f => f.id === localFile.id ? { ...f, status: 'error' as const } : f)
-      )
-      toast.error(`Erreur lors de l'upload de ${localFile.name}`)
+      const newFiles = Array.from(e.target.files).map(file => ({
+        id: `local-${Date.now()}-${Math.random()}`,
+        name: file.name,
+        size: (file.size / (1024 * 1024)).toFixed(1) + ' MB',
+        date: new Date().toLocaleDateString('fr-FR'),
+        status: 'uploading' as const,
+        file: file,
+      }))
+      setFiles(prev => [...newFiles, ...prev])
+      console.log('✅ Fichiers sélectionnés :', newFiles.length)
     }
   }
 
-  // Upload tous les fichiers en attente
-  const uploadAllFiles = async () => {
-    const filesToUpload = uploadedFiles.filter(f => f.file && f.status === 'en_attente')
-    
-    if (filesToUpload.length === 0) {
-      toast.info('Aucun fichier à uploader')
+  const uploadSingleFile = async (fileItem: UploadedFile) => {
+    if (!token || !fileItem.file) {
+      toast.error('Token manquant ou fichier invalide')
       return
     }
 
-    setIsUploading(true)
-    
-    for (const file of filesToUpload) {
-      await uploadFile(file)
+    console.log('🚀 Début upload du fichier :', fileItem.name)
+
+    setFiles(prev => prev.map(f => f.id === fileItem.id ? { ...f, status: 'uploading' } : f))
+
+    try {
+      const response = await invoicesApi.uploadInvoice(fileItem.file, token)
+      
+      console.log('✅ Upload réussi ! ID reçu du backend :', response.id)
+
+      setFiles(prev => prev.map(f => 
+        f.id === fileItem.id ? { ...f, id: response.id, status: 'en_cours', file: undefined } : f
+      ))
+
+      toast.success(`✅ ${fileItem.name} uploadé avec succès`)
+
+      // Redirection vers la page de traitement
+      setTimeout(() => {
+        router.push(`/dashboard/processing/${response.id}`)
+      }, 1200)
+
+    } catch (err: any) {
+      console.error('❌ Erreur lors de l’upload :', err)
+      setFiles(prev => prev.map(f => f.id === fileItem.id ? { ...f, status: 'error' } : f))
+      toast.error(`Échec upload de ${fileItem.name}`)
     }
-    
+  }
+
+  const handleUploadAll = async () => {
+    setIsUploading(true)
+    const filesToUpload = files.filter(f => f.file)
+    for (const file of filesToUpload) {
+      await uploadSingleFile(file)
+    }
     setIsUploading(false)
   }
 
-  // Lancer le traitement OCR d'une facture
-  const handleProcess = async (fileId: string | number) => {
-    if (!token) return
-
-    // Si c'est un fichier local, d'abord l'uploader
-    const file = uploadedFiles.find(f => f.id === fileId)
-    if (file?.file) {
-      await uploadFile(file)
-      return
-    }
-
-    setUploadedFiles(prev => 
-      prev.map(f => f.id === fileId ? { ...f, status: 'en_cours' as const } : f)
-    )
-    
-    // Naviguer vers la page de traitement
-    router.push(`/dashboard/processing/${fileId}`)
-  }
-
-  const removeFile = async (fileId: string | number) => {
-    const file = uploadedFiles.find(f => f.id === fileId)
-    
-    // Si c'est un fichier déjà sur le serveur, le supprimer via l'API
-    if (token && file && !file.file && typeof fileId === 'number') {
-      try {
-        await invoicesApi.deleteInvoice(fileId, token)
-        toast.success('Fichier supprimé')
-      } catch {
-        toast.error('Erreur lors de la suppression')
-        return
-      }
-    }
-    
-    setUploadedFiles(prev => prev.filter(f => f.id !== fileId))
-  }
-
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Importer factures</h1>
-        <p className="text-muted-foreground">Importez vos factures pour les traiter par OCR</p>
-      </div>
+    <div className="space-y-6 p-6">
+      <h1 className="text-3xl font-bold">Importer des factures</h1>
 
-      {/* Upload Zone */}
       <Card>
-        <CardHeader>
-          <CardTitle>Importer factures</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            className={cn(
-              'relative flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-12 transition-colors',
-              isDragging
-                ? 'border-primary bg-primary/5'
-                : 'border-muted-foreground/25 hover:border-primary/50'
-            )}
+        <CardContent className="p-12 text-center">
+          <Upload className="mx-auto h-16 w-16 text-primary mb-6" />
+          <p className="text-2xl font-medium">Glissez vos factures ici</p>
+          
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.jpg,.jpeg,.png"
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+
+          <Button 
+            onClick={() => fileInputRef.current?.click()}
+            size="lg"
+            className="mt-8"
           >
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 mb-4">
-              <Upload className="h-8 w-8 text-primary" />
-            </div>
-            <p className="text-lg font-medium mb-2">
-              Glissez et déposez votre facture ici
-            </p>
-            <p className="text-sm text-muted-foreground mb-4">
-              ou cliquez pour sélectionner un fichier
-            </p>
-            <input
-              type="file"
-              accept=".pdf,.jpg,.jpeg,.png"
-              multiple
-              onChange={handleFileSelect}
-              className="absolute inset-0 cursor-pointer opacity-0"
-            />
-            <Button variant="outline">
-              <FileText className="mr-2 h-4 w-4" />
-              Parcourir
-            </Button>
-            <p className="mt-4 text-xs text-muted-foreground">
-              Formats acceptés: PDF, JPG, PNG (max 10MB)
-            </p>
-          </div>
+            <FileText className="mr-2 h-5 w-5" />
+            Sélectionner des fichiers
+          </Button>
         </CardContent>
       </Card>
 
-      {/* Uploaded Files Table */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Fichiers importés</CardTitle>
-          {uploadedFiles.some(f => f.file && f.status === 'en_attente') && (
-            <Button onClick={uploadAllFiles} disabled={isUploading}>
-              {isUploading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Upload en cours...
-                </>
-              ) : (
-                <>
-                  <Upload className="mr-2 h-4 w-4" />
-                  Uploader tout
-                </>
-              )}
-            </Button>
-          )}
-        </CardHeader>
-        <CardContent>
-          {uploadedFiles.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <File className="h-12 w-12 text-muted-foreground/50 mb-4" />
-              <p className="text-muted-foreground">Aucun fichier importé</p>
-            </div>
-          ) : (
+      {files.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Fichiers sélectionnés ({files.length})</CardTitle>
+          </CardHeader>
+          <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Nom Fichier</TableHead>
+                  <TableHead>Nom</TableHead>
                   <TableHead>Taille</TableHead>
-                  <TableHead>Date</TableHead>
                   <TableHead>Statut</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {uploadedFiles.map((file) => (
+                {files.map(file => (
                   <TableRow key={file.id}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <FileText className="h-4 w-4 text-muted-foreground" />
-                        {file.name}
-                      </div>
-                    </TableCell>
+                    <TableCell>{file.name}</TableCell>
                     <TableCell>{file.size}</TableCell>
-                    <TableCell>{file.date}</TableCell>
                     <TableCell>
-                      <Badge className={statusColors[file.status]}>
-                        {file.status === 'uploading' && (
-                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                        )}
-                        {statusLabels[file.status]}
+                      <Badge className={file.status === 'uploading' ? 'bg-blue-500' : 'bg-orange-500'}>
+                        {file.status}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        {file.status === 'en_attente' && (
-                          <Button
-                            size="sm"
-                            onClick={() => handleProcess(file.id)}
-                          >
-                            {file.file ? 'Uploader' : 'Traiter'}
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-destructive"
-                          onClick={() => removeFile(file.id)}
-                          disabled={file.status === 'uploading'}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
+                      <Button size="sm" onClick={() => uploadSingleFile(file)}>
+                        Uploader
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
-          )}
-        </CardContent>
-      </Card>
+
+            <Button onClick={handleUploadAll} disabled={isUploading} className="w-full mt-6">
+              {isUploading ? (
+                <> <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Upload en cours... </>
+              ) : (
+                'Uploader tous les fichiers'
+              )}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

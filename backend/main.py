@@ -4,6 +4,7 @@ from interface.api.routers.auth_router import router as auth_router
 from interface.api.routers.invoice_router import router as invoice_router  # ✅ AJOUT
 from infrastructure.database.models import Base
 from core.db import engine
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="PharmaOCR API")
 
@@ -23,6 +24,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Servir les fichiers uploadés (images et PDF)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Inclure les routers
 app.include_router(auth_router, prefix="/api")

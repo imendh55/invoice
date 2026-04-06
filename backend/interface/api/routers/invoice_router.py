@@ -22,35 +22,28 @@ router = APIRouter(
     tags=["Factures"]
 )
 
-
-# ====================== STATS DASHBOARD ====================== ✅ NOUVEAU
+# ====================== STATS DASHBOARD ======================
 @router.get("/stats")
 def get_stats(
     db: Session = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
-    """Statistiques pour le tableau de bord"""
     from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
     repository = SqlInvoiceRepository(db)
     all_invoices = repository.list_all(limit=10000)
 
-    # Comptages par statut
     total = len(all_invoices)
     en_cours = len([i for i in all_invoices if i.status == "en_cours"])
     validees = len([i for i in all_invoices if i.status == "validated"])
     rejetees = len([i for i in all_invoices if i.status == "rejected"])
 
-    # Données mensuelles (groupement par mois d'upload)
     monthly_counts = defaultdict(int)
     for inv in all_invoices:
         if inv.upload_date:
             month_key = inv.upload_date.strftime("%b")
             monthly_counts[month_key] += 1
 
-    monthly_data = [
-        {"month": month, "count": count}
-        for month, count in monthly_counts.items()
-    ]
+    monthly_data = [{"month": month, "count": count} for month, count in monthly_counts.items()]
 
     return {
         "totalInvoices": total,
@@ -62,21 +55,23 @@ def get_stats(
 
 
 # ====================== UPLOAD ======================
-@router.post("/upload", response_model=dict)
+@router.post("/upload")
 async def upload_invoice(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
-    """Upload une facture → Preprocess → OCR → Extraction → Sauvegarde"""
-    result = process_upload(file, db)
-    return {
-        "message": "✅ Facture uploadée et traitée avec succès",
-        **result
-    }
+    try:
+        result = process_upload(file, db)
+        return {
+            "message": "✅ Facture uploadée et traitée avec succès",
+            **result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ====================== HISTORIQUE PAGINÉ ====================== ✅ MODIFIÉ
+# ====================== HISTORIQUE ======================
 @router.get("/history")
 def get_history(
     page: int = Query(1, ge=1),
@@ -86,31 +81,21 @@ def get_history(
     db: Session = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
-    """
-    Récupère l'historique paginé des factures.
-    Retourne le format attendu par le frontend :
-    { items, total, page, limit, totalPages }
-    """
     from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
     repository = SqlInvoiceRepository(db)
 
-    # Récupérer toutes les factures (avec filtre statut/recherche)
     if query:
         all_invoices = repository.search(query, limit=10000)
     else:
         all_invoices = repository.list_all(limit=10000, status=status)
 
-    # Filtrer par statut si recherche + statut combinés
     if query and status:
         all_invoices = [i for i in all_invoices if i.status == status]
 
     total = len(all_invoices)
     total_pages = max(1, (total + limit - 1) // limit)
-
-    # Pagination manuelle
     start = (page - 1) * limit
-    end = start + limit
-    page_items = all_invoices[start:end]
+    page_items = all_invoices[start:start + limit]
 
     return {
         "items": [inv.to_dict() for inv in page_items],
@@ -121,25 +106,48 @@ def get_history(
     }
 
 
-# ====================== RECHERCHE ======================
-@router.get("/search", response_model=list)
+# ====================== DÉTAIL FACTURE (CORRIGÉ) ======================
+@router.get("/{invoice_id}", response_model=InvoiceResponse)
+def get_invoice(
+    invoice_id: int,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Récupère les détails d'une facture - Mapping corrigé pour le frontend"""
+    from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
+    repository = SqlInvoiceRepository(db)
+    invoice = repository.get_by_id(invoice_id)
+
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+
+    data = invoice.to_dict()
+
+    # Mapping explicite pour éviter l'erreur de validation Pydantic
+    return {
+        "id": data["id"],
+        "filename": data.get("fileName") or data.get("filename"),
+        "filePath": data.get("filePath"),
+        "status": data.get("status"),
+        "extracted_data": data.get("extractedData"),   # ← correction clé
+        "createdAt": data.get("createdAt"),
+        "totalTTC": data.get("total_ttc") or data.get("totalTTC"),
+    }
+
+
+# ====================== AUTRES ROUTES (inchangées) ======================
+@router.get("/search")
 def search(
     keyword: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
-    """Recherche intelligente des factures"""
     return search_invoices(db, keyword=keyword, limit=limit)
 
 
-# ====================== EXPORT CSV ======================
 @router.get("/export/csv")
-def export_csv(
-    db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
-):
-    """Exporte toutes les factures au format CSV"""
+def export_csv(db: Session = Depends(get_db), current_user: str = Depends(get_current_user)):
     csv_content = export_to_csv(db)
     return Response(
         content=csv_content,
@@ -148,61 +156,30 @@ def export_csv(
     )
 
 
-# ====================== EXPORT JSON ======================
 @router.get("/export/json")
-def export_json(
-    db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
-):
-    """Exporte toutes les factures au format JSON"""
+def export_json(db: Session = Depends(get_db), current_user: str = Depends(get_current_user)):
     return export_to_json(db)
 
 
-# ====================== VALIDATION ======================
-@router.post("/{invoice_id}/validate", response_model=dict)
+@router.post("/{invoice_id}/validate")
 def validate(
     invoice_id: int,
     feedback: FeedbackRequest,
     db: Session = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
-    """Valide et corrige les données d'une facture"""
     result = validate_invoice(db, invoice_id, feedback.corrections)
     if not result:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
-
-    return {
-        "message": "✅ Facture validée et corrections enregistrées",
-        "invoice": result
-    }
+    return {"message": "✅ Facture validée", "invoice": result}
 
 
-# ====================== RÉCUPÉRER PAR ID ======================
-@router.get("/{invoice_id}", response_model=InvoiceResponse)
-def get_invoice(
-    invoice_id: int,
-    db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
-):
-    """Récupère les détails complets d'une facture"""
-    from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
-    repository = SqlInvoiceRepository(db)
-    invoice = repository.get_by_id(invoice_id)
-
-    if not invoice:
-        raise HTTPException(status_code=404, detail="Facture non trouvée")
-
-    return invoice.to_dict()
-
-
-# ====================== SUPPRIMER UNE FACTURE ======================
 @router.delete("/{invoice_id}")
 def delete_invoice(
     invoice_id: int,
     db: Session = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
-    """Supprime une facture"""
     from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
     repository = SqlInvoiceRepository(db)
     invoice = repository.get_by_id(invoice_id)
@@ -210,23 +187,8 @@ def delete_invoice(
     if not invoice:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
-    # Supprimer via le modèle SQLAlchemy directement
     from infrastructure.database.models import InvoiceModel
     db.query(InvoiceModel).filter(InvoiceModel.id == invoice_id).delete()
     db.commit()
 
-    return {"message": "✅ Facture supprimée"}
-
-
-# ====================== LISTE SIMPLE ======================
-@router.get("/")
-def list_invoices(
-    limit: int = Query(50, ge=1, le=200),
-    db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
-):
-    """Liste simple de toutes les factures"""
-    from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
-    repository = SqlInvoiceRepository(db)
-    invoices = repository.list_all(limit=limit)
-    return [inv.to_dict() for inv in invoices]
+    return {"message": "✅ Facture supprimée avec succès"}
