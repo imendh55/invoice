@@ -1,35 +1,53 @@
 'use client'
 
 import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
 import { Sidebar } from '@/components/dashboard/sidebar'
 import { Header } from '@/components/dashboard/header'
 import { useAuth } from '@/lib/auth-context'
-
-const DEV_MODE = true
+import { Loader2 } from 'lucide-react'
 
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const { isAuthenticated, isLoading } = useAuth()
-  const router = useRouter()
+  const { isAuthenticated, isLoading, user } = useAuth()
+  const router   = useRouter()
+  const pathname = usePathname()
 
   useEffect(() => {
-    if (DEV_MODE) return
-    if (!isLoading && !isAuthenticated) {
-      router.push('/login')
-    }
-  }, [isLoading, isAuthenticated, router])
+    if (isLoading) return
 
-  if (isLoading && !DEV_MODE) {
+    // ✅ Non connecté → login
+    if (!isAuthenticated) {
+      router.push('/login')
+      return
+    }
+
+    // ✅ Page admin → vérifier le rôle
+    if (pathname.startsWith('/dashboard/admin') && user?.role !== 'admin') {
+      router.push('/dashboard') // user normal → dashboard
+    }
+  }, [isLoading, isAuthenticated, user, router, pathname])
+
+  // Spinner pendant le chargement de l'auth
+  if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-10 w-10 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Chargement...</p>
+        </div>
       </div>
     )
   }
+
+  // Pas authentifié → rien (la redirection est en cours)
+  if (!isAuthenticated) return null
+
+  // Admin requis mais user normal → rien (redirection en cours)
+  if (pathname.startsWith('/dashboard/admin') && user?.role !== 'admin') return null
 
   return (
     <div className="min-h-screen bg-background">
