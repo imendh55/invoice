@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from infrastructure.database.models import Base
 from core.db import engine
+from fastapi.staticfiles import StaticFiles
 
 # ✅ Créer les tables avant tout
 Base.metadata.create_all(bind=engine)
@@ -16,6 +17,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Servir les fichiers uploadés (images et PDF)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # ✅ Routers — chacun dans un try/except pour isoler les erreurs
 try:
