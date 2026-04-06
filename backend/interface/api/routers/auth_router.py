@@ -13,11 +13,9 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-
 class LoginRequest(BaseModel):
     email: str
     password: str
-
 
 class RegisterRequest(BaseModel):
     nom: str
@@ -27,28 +25,11 @@ class RegisterRequest(BaseModel):
     dateAnniversaire: str | None = None
     cin: str | None = None
 
-
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-
-
-def user_to_dict(user: User) -> dict:
-    """
-    ✅ Format camelCase pour le frontend.
-    Le frontend attend : id, nom, prenom, email, role, createdAt
-    """
-    return {
-        "id":        user.id,
-        "nom":       user.nom,
-        "prenom":    user.prenom,
-        "email":     user.email,
-        "role":      user.role,
-        "createdAt": user.created_at.isoformat(),   # ✅ camelCase
-    }
-
 
 @router.post("/register")
 def register(user: RegisterRequest, db: Session = Depends(get_db)):
@@ -63,20 +44,26 @@ def register(user: RegisterRequest, db: Session = Depends(get_db)):
         nom=user.nom,
         prenom=user.prenom,
         hashed_password=hashed,
-        dateAnniversaire=user.dateAnniversaire,
+        dateAnniversaire=user.dateAnniversaire,  # ✅ Espace supprimé
         cin=user.cin,
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    token = create_access_token({"sub": user.email})
+    token = create_access_token({"sub": user.email})  # ✅ Espace supprimé
     return {
-        "access_token": token,
-        "token_type":   "bearer",
-        "user":         user_to_dict(new_user),
+        "access_token": token,  # ✅ Espace supprimé
+        "token_type": "bearer",  # ✅ Espace supprimé
+        "user": {  # ✅ Espace supprimé
+            "id": new_user.id,  # ✅ Espace supprimé
+            "nom": new_user.nom,  # ✅ Espace supprimé
+            "prenom": new_user.prenom,  # ✅ Espace supprimé
+            "email": new_user.email,  # ✅ Espace supprimé
+            "role": new_user.role,  # ✅ Espace supprimé
+            "createdAt": new_user.created_at.isoformat(),  # ✅ Espace supprimé
+        }
     }
-
 
 @router.post("/login")
 def login(user: LoginRequest, db: Session = Depends(get_db)):
@@ -84,20 +71,33 @@ def login(user: LoginRequest, db: Session = Depends(get_db)):
     if not db_user or not pwd_context.verify(user.password, db_user.hashed_password):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
 
-    token = create_access_token({"sub": user.email})
+    token = create_access_token({"sub": user.email})  # ✅ Espace supprimé
     return {
-        "access_token": token,
-        "token_type":   "bearer",
-        "user":         user_to_dict(db_user),
+        "access_token": token,  # ✅ Espace supprimé
+        "token_type": "bearer",  # ✅ Espace supprimé
+        "user": {  # ✅ Espace supprimé
+            "id": db_user.id,  # ✅ Espace supprimé
+            "nom": db_user.nom,  # ✅ Espace supprimé
+            "prenom": db_user.prenom,  # ✅ Espace supprimé
+            "email": db_user.email,  # ✅ Espace supprimé
+            "role": db_user.role,  # ✅ Espace supprimé
+            "createdAt": db_user.created_at.isoformat(),  # ✅ Espace supprimé
+        }
     }
 
-
-@router.get("/me")
+@router.get("/me")  # ✅ Espace supprimé
 def get_me(
     db: Session = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
-    db_user = db.query(User).filter(User.email == current_user).first()
+    db_user = db.query(User).filter(User.email == current_user).first()  # ✅ "Use r" corrigé
     if not db_user:
-        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
-    return user_to_dict(db_user)
+        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")  # ✅ Espace supprimé
+    return {
+        "id": db_user.id,  # ✅ Espace supprimé
+        "nom": db_user.nom,  # ✅ Espace supprimé
+        "prenom": db_user.prenom,  # ✅ Espace supprimé
+        "email": db_user.email,  # ✅ Espace supprimé
+        "role": db_user.role,  # ✅ Espace supprimé
+        "createdAt": db_user.created_at.isoformat(),  # ✅ Espace supprimé
+    }
