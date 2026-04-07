@@ -1,3 +1,4 @@
+// lib/api/admin.ts
 import { API_BASE_URL, getHeaders, handleApiResponse } from './config'
 
 export interface AdminUser {
@@ -37,12 +38,51 @@ export interface UpdateUserRequest {
   cin?: string
 }
 
-export async function getUsers(token: string, params?: {
-  page?: number
-  limit?: number
-  search?: string
-  role?: string
-}): Promise<PaginatedUsers> {
+// Interface des statistiques (déjà présente dans ton page.tsx)
+export interface AdminStats {
+  users: {
+    total: number
+    admins: number
+    users: number
+    newThisWeek: number
+  }
+  invoices: {
+    total: number
+    validated: number
+    rejected: number
+    uploaded: number
+    extracted: number
+    newThisWeek: number
+    successRate: number
+    totalTTC: number
+  }
+  monthlyData: { month: string; total: number; validated: number }[]
+  recentUsers: {
+    id: number
+    nom: string
+    prenom: string
+    email: string
+    role: string
+    createdAt: string
+  }[]
+  recentInvoices: {
+    id: number
+    fileName: string
+    status: string
+    totalTTC?: number
+    createdAt: string
+  }[]
+}
+
+export async function getUsers(
+  token: string,
+  params?: {
+    page?: number
+    limit?: number
+    search?: string
+    role?: string
+  }
+): Promise<PaginatedUsers> {
   const q = new URLSearchParams()
   if (params?.page) q.append('page', String(params.page))
   if (params?.limit) q.append('limit', String(params.limit))
@@ -81,9 +121,10 @@ export async function deleteUser(token: string, id: number): Promise<void> {
   return handleApiResponse<void>(response)
 }
 
-export async function getAdminStats(token: string) {
+// Fonction corrigée
+export async function getAdminStats(token: string): Promise<AdminStats> {
   const response = await fetch(`${API_BASE_URL}/admin/stats`, {
     headers: getHeaders(token),
   })
-  return handleApiResponse(response)
+  return handleApiResponse<AdminStats>(response)
 }

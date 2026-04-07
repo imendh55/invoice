@@ -1,209 +1,250 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
-from fastapi.responses import Response
+"""
+Router API pour la gestion des factures.
+Dépend de l'infrastructure pour l'implémentation concrète.
+"""
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
 from sqlalchemy.orm import Session
-from typing import Optional
-from collections import defaultdict
+from typing import List, Optional, Any
+from datetime import datetime
+import os
+from pathlib import Path
+import time
 
 from core.db import get_db
+from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
+from interface.api.schemas.invoice_schema import InvoiceResponse, InvoiceCreate, InvoiceUpdate
 from interface.dependencies.auth import get_current_user
-from interface.api.schemas.invoice_schema import InvoiceResponse, FeedbackRequest
+from infrastructure.database.models import InvoiceModel
 
-router = APIRouter(prefix="/invoices", tags=["Factures"])
+router = APIRouter(prefix="/invoices", tags=["Invoices"])
 
 
-# ============================================================
-# 1. STATS — GET /api/invoices/stats
-# ============================================================
+# Dépendance pour obtenir le repository
+def get_invoice_repository(db: Session = Depends(get_db)) -> SqlInvoiceRepository:
+    """Factory pour obtenir une instance du repository."""
+    return SqlInvoiceRepository(db=db)
+
+
+@router.post("/", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
+async def create_invoice(
+    invoice_data: InvoiceCreate,
+    repo: SqlInvoiceRepository = Depends(get_invoice_repository),
+    current_user: Any = Depends(get_current_user)
+):
+    """Créer une nouvelle facture."""
+    try:
+        saved = repo.save(invoice_data)
+        return saved
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur lors de la création: {str(e)}"
+        )
+
+
+@router.get("/", response_model=List[InvoiceResponse])
+async def list_invoices(
+    limit: int = Query(20, ge=1, le=100),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    repo: SqlInvoiceRepository = Depends(get_invoice_repository),
+    current_user: Any = Depends(get_current_user)
+):
+    """Lister les factures avec pagination et filtre optionnel."""
+    return repo.list_all(limit=limit, status=status_filter)
+
+
+@router.get("/{invoice_id}", response_model=InvoiceResponse)
+async def get_invoice(
+    invoice_id: int,
+    repo: SqlInvoiceRepository = Depends(get_invoice_repository),
+    current_user: Any = Depends(get_current_user)
+):
+    """Récupérer une facture par son ID."""
+    invoice = repo.get_by_id(invoice_id)
+    if not invoice:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Facture #{invoice_id} non trouvée"
+        )
+    return invoice
+
+
+@router.get("/search", response_model=List[InvoiceResponse])
+async def search_invoices(
+    keyword: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+    repo: SqlInvoiceRepository = Depends(get_invoice_repository),
+    current_user: Any = Depends(get_current_user)
+):
+    """Recherche simple par mot-clé."""
+    return repo.search(keyword=keyword, limit=limit)
+
+
+@router.post("/upload", status_code=status.HTTP_201_CREATED)
+async def upload_invoice_file(
+    file: UploadFile = File(...),
+    repo: SqlInvoiceRepository = Depends(get_invoice_repository),
+    current_user: Any = Depends(get_current_user)
+):
+    """Uploader un fichier de facture pour traitement OCR."""
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nom de fichier manquant"
+        )
+
+    if not file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.pdf')):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Format de fichier non supporté"
+        )
+
+    try:
+        # 1. Sauvegarder le fichier
+        uploads_dir = Path("uploads")
+        uploads_dir.mkdir(exist_ok=True)
+
+        # Générer un nom unique
+        timestamp = int(time.time())
+        ext = Path(file.filename).suffix
+        safe_filename = f"{timestamp}_{file.filename}"
+        file_path = uploads_dir / safe_filename
+
+        # Lire et écrire le contenu
+        content = await file.read()
+        with open(file_path, "wb") as buffer:
+            buffer.write(content)
+
+        file_size = len(content)
+
+        # 2. Créer l'entrée en base de données
+        # Utiliser les bons noms de champs selon le modèle
+        db_invoice = InvoiceModel(
+            filename=safe_filename,  # ← Utiliser 'filename' pas 'file_name'
+            file_path=f"uploads/{safe_filename}",
+            file_size=file_size,
+            status="uploaded",
+            extracted_data={},
+            total_amount=None,
+            supplier_name=None,
+            invoice_number=None,
+            invoice_date=None
+        )
+
+        repo.db.add(db_invoice)
+        repo.db.commit()
+        repo.db.refresh(db_invoice)
+
+        return {
+            "id": db_invoice.id,
+            "filename": safe_filename,
+            "status": "uploaded",
+            "message": "Fichier uploadé avec succès"
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur lors de l'upload: {str(e)}"
+        )
+
+
+@router.put("/{invoice_id}", response_model=InvoiceResponse)
+async def update_invoice(
+    invoice_id: int,
+    invoice_data: InvoiceUpdate,
+    repo: SqlInvoiceRepository = Depends(get_invoice_repository),
+    current_user: Any = Depends(get_current_user)
+):
+    """Mettre à jour une facture existante."""
+    existing = repo.get_by_id(invoice_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Facture #{invoice_id} non trouvée"
+        )
+
+    # Fusion des données
+    update_data = invoice_data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(existing, key, value)
+
+    return repo.update(existing)
+
+
+@router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_invoice(
+    invoice_id: int,
+    repo: SqlInvoiceRepository = Depends(get_invoice_repository),
+    current_user: Any = Depends(get_current_user)
+):
+    """Supprimer une facture."""
+    success = repo.delete(invoice_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Facture #{invoice_id} non trouvée"
+        )
+
+
 @router.get("/stats")
-def get_stats(
-    db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+async def get_invoice_stats(
+    repo: SqlInvoiceRepository = Depends(get_invoice_repository),
+    current_user: Any = Depends(get_current_user)
 ):
-    from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
-    repository = SqlInvoiceRepository(db)
-    all_invoices = repository.list_all(limit=10000)
+    """Récupérer les statistiques des factures."""
+    return repo.get_stats()
 
-    total    = len(all_invoices)
-    en_cours = len([i for i in all_invoices if i.status == "en_cours"])
-    validees = len([i for i in all_invoices if i.status == "validated"])
-    rejetees = len([i for i in all_invoices if i.status == "rejected"])
 
-    monthly_counts = defaultdict(int)
-    for inv in all_invoices:
-        if inv.upload_date:
-            monthly_counts[inv.upload_date.strftime("%b")] += 1
+@router.get("/recent", response_model=List[InvoiceResponse])
+async def get_recent_invoices(
+    limit: int = Query(5, ge=1, le=20),
+    repo: SqlInvoiceRepository = Depends(get_invoice_repository),
+    current_user: Any = Depends(get_current_user)
+):
+    """Récupérer les dernières factures (pour dashboard)."""
+    return repo.get_recent(limit=limit)
 
-    return {
-        "totalInvoices": total,
-        "enCours":       en_cours,
-        "validees":      validees,
-        "rejetees":      rejetees,
-        "monthlyData":   [
-            {"month": m, "count": c}
-            for m, c in monthly_counts.items()
-        ],
+
+@router.post("/advanced-search")
+async def advanced_search(
+    page: int = Query(1, ge=1),
+    limit: int = Query(15, ge=1, le=100),
+    sort_by: str = Query("created_at"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
+    status_filter: Optional[str] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    supplier: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+    repo: SqlInvoiceRepository = Depends(get_invoice_repository),
+    current_user: Any = Depends(get_current_user)
+):
+    """Recherche avancée avec filtres multiples et pagination."""
+    filters = {
+        "status": status_filter,
+        "date_from": date_from,
+        "date_to": date_to,
+        "supplier": supplier,
+        "amount_min": amount_min,
+        "amount_max": amount_max
     }
+    # Filtrer les valeurs None
+    filters = {k: v for k, v in filters.items() if v is not None}
 
-
-# ============================================================
-# 2. HISTORIQUE PAGINÉ — GET /api/invoices/history
-# ============================================================
-@router.get("/history")
-def get_history(
-    page:         int           = Query(1,  ge=1),
-    limit:        int           = Query(20, ge=1, le=100),
-    status:       Optional[str] = Query(None),
-    query:        Optional[str] = Query(None),
-    db:           Session       = Depends(get_db),
-    current_user: str           = Depends(get_current_user)
-):
-    from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
-    repository = SqlInvoiceRepository(db)
-
-    if query:
-        all_invoices = repository.search(query, limit=10000)
-        if status:
-            all_invoices = [i for i in all_invoices if i.status == status]
-    else:
-        all_invoices = repository.list_all(limit=10000, status=status)
-
-    total       = len(all_invoices)
-    total_pages = max(1, (total + limit - 1) // limit)
-    start       = (page - 1) * limit
-    page_items  = all_invoices[start: start + limit]
-
-    return {
-        "items":      [inv.to_dict() for inv in page_items],
-        "total":      total,
-        "page":       page,
-        "limit":      limit,
-        "totalPages": total_pages,
-    }
-
-
-# ============================================================
-# 3. RECHERCHE — GET /api/invoices/search
-# ============================================================
-@router.get("/search")
-def search(
-    keyword:      Optional[str] = Query(None),
-    limit:        int           = Query(20, ge=1, le=100),
-    db:           Session       = Depends(get_db),
-    current_user: str           = Depends(get_current_user)
-):
-    from application.use_cases.search_invoices import search_invoices
-    return search_invoices(db, keyword=keyword, limit=limit)
-
-
-# ============================================================
-# 4. EXPORT CSV — GET /api/invoices/export/csv
-# ============================================================
-@router.get("/export/csv")
-def export_csv(
-    db:           Session = Depends(get_db),
-    current_user: str     = Depends(get_current_user)
-):
-    from application.use_cases.export_invoice import export_to_csv
-    csv_content = export_to_csv(db)
-    return Response(
-        content=csv_content,
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=factures.csv"}
+    items, total = repo.advanced_search(
+        page=page,
+        limit=limit,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        **filters
     )
 
-
-# ============================================================
-# 5. EXPORT JSON — GET /api/invoices/export/json
-# ============================================================
-@router.get("/export/json")
-def export_json(
-    db:           Session = Depends(get_db),
-    current_user: str     = Depends(get_current_user)
-):
-    from application.use_cases.export_invoice import export_to_json
-    return export_to_json(db)
-
-
-# ============================================================
-# 6. UPLOAD — POST /api/invoices/upload
-# ============================================================
-@router.post("/upload")
-async def upload_invoice(
-    file:         UploadFile = File(...),
-    db:           Session    = Depends(get_db),
-    current_user: str        = Depends(get_current_user)
-):
-    from application.use_cases.upload_invoice import process_upload
-    result = process_upload(file, db)
     return {
-        "message": "✅ Facture uploadée et traitée avec succès",
-        **result
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit
     }
-
-
-# ============================================================
-# 7. LISTE SIMPLE — GET /api/invoices/
-# ============================================================
-@router.get("/")
-def list_invoices(
-    limit:        int     = Query(50, ge=1, le=200),
-    db:           Session = Depends(get_db),
-    current_user: str     = Depends(get_current_user)
-):
-    from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
-    repository = SqlInvoiceRepository(db)
-    return [inv.to_dict() for inv in repository.list_all(limit=limit)]
-
-
-# ============================================================
-# ⚠️ ROUTES AVEC PARAMÈTRES — TOUJOURS EN DERNIER
-# ============================================================
-
-# 8. VALIDATION — POST /api/invoices/{id}/validate
-@router.post("/{invoice_id}/validate")
-def validate(
-    invoice_id:   int,
-    feedback:     FeedbackRequest,
-    db:           Session = Depends(get_db),
-    current_user: str     = Depends(get_current_user)
-):
-    from application.use_cases.validate_invoice import validate_invoice
-    result = validate_invoice(db, invoice_id, feedback.corrections)
-    if not result:
-        raise HTTPException(status_code=404, detail="Facture non trouvée")
-    return {
-        "message": "✅ Facture validée",
-        "invoice": result
-    }
-
-
-# 9. SUPPRESSION — DELETE /api/invoices/{id}
-@router.delete("/{invoice_id}")
-def delete_invoice(
-    invoice_id:   int,
-    db:           Session = Depends(get_db),
-    current_user: str     = Depends(get_current_user)
-):
-    from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
-    from infrastructure.database.models import InvoiceModel
-    repository = SqlInvoiceRepository(db)
-    if not repository.get_by_id(invoice_id):
-        raise HTTPException(status_code=404, detail="Facture non trouvée")
-    db.query(InvoiceModel).filter(InvoiceModel.id == invoice_id).delete()
-    db.commit()
-    return {"message": "✅ Facture supprimée"}
-
-
-# 10. DÉTAIL — GET /api/invoices/{id}  ← EN TOUT DERNIER
-@router.get("/{invoice_id}", response_model=InvoiceResponse)
-def get_invoice(
-    invoice_id:   int,
-    db:           Session = Depends(get_db),
-    current_user: str     = Depends(get_current_user)
-):
-    from infrastructure.repository.invoice_repo_sql import SqlInvoiceRepository
-    repository = SqlInvoiceRepository(db)
-    invoice    = repository.get_by_id(invoice_id)
-    if not invoice:
-        raise HTTPException(status_code=404, detail="Facture non trouvée")
-    return invoice.to_dict()

@@ -3,12 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from infrastructure.database.models import Base
 from core.db import engine
 
-# ✅ Créer les tables avant tout
+# Créer les tables au démarrage
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="PharmaOCR API", version="1.0.0")
 
-# ✅ CORS AVANT les routers
+# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -17,7 +17,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Routers — chacun dans un try/except pour isoler les erreurs
+# ====================== ROUTERS ======================
+
 try:
     from interface.api.routers.auth_router import router as auth_router
     app.include_router(auth_router, prefix="/api")
@@ -37,12 +38,16 @@ try:
     app.include_router(admin_router, prefix="/api")
     print("✅ Admin router OK")
 except Exception as e:
-    print(f"⚠️  Admin router non chargé : {e}")
+    print(f"❌ Admin router ERREUR : {e}")
+
+# ====================== ROUTES DE BASE ======================
 
 @app.get("/")
 def read_root():
-    return {"message": "PharmaOCR API is running"}
+    return {"message": "PharmaOCR API is running", "status": "ok"}
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    return {"status": "healthy", "cors": "enabled"}
+
+print("🚀 PharmaOCR Backend started successfully")

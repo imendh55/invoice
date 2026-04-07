@@ -1,165 +1,216 @@
 'use client'
-
 import { useState, useEffect } from 'react'
-import { useRouter, useParams } from 'next/navigation'
-import { 
-  FileText, 
-  CheckCircle, 
-  XCircle, 
-  AlertTriangle, 
-  Download, 
-  RefreshCw,
-  Trash2,
-  Save
+import { useParams, useRouter } from 'next/navigation'
+import {
+  FileText, ArrowLeft, CheckCircle, XCircle, Save,
+  Loader2, AlertCircle, Building2, Calendar, Hash,
+  Receipt, Package, Edit3, RotateCcw
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Textarea } from '@/components/ui/textarea'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { mockInvoices, mockExtractedData } from '@/lib/mock-data'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-context'
-import * as invoicesApi from '@/lib/api/invoices'
+import { API_BASE_URL, getHeaders } from '@/lib/api/config'
 import { toast } from 'sonner'
 
-interface ExtractedData {
-  numeroFacture: string
-  date: string
-  fournisseur: string
-  adresseFournisseur: string
-  client: string
-  adresseClient: string
-  totalHT: number
-  tva: number
-  totalTTC: number
-  produits: { id: string; nom: string; quantite: number; prixUnitaire: number; total: number }[]
+// ── Types ─────────────────────────────────────────────────────
+interface Product {
+  nom: string
+  quantite: number
+  prixUnitaire: number
+  total: number
 }
 
+interface ExtractedData {
+  numeroFacture?: string
+  fournisseur?: string
+  date?: string
+  adresseFournisseur?: string
+  client?: string
+  adresseClient?: string
+  totalHT?: number | null
+  tva?: number | null
+  totalTTC?: number | null
+  produits?: Product[]
+  rawText?: string
+  // Alias backend snake_case
+  invoice_number?: string
+  supplier?: string
+  total_ht?: number | null
+  total_tva?: number | null
+  total_ttc?: number | null
+}
+
+interface InvoiceDetail {
+  id: number
+  fileName: string
+  filePath?: string
+  status: string
+  extractedData: ExtractedData
+  validatedData?: ExtractedData
+  total_ttc?: number | null
+  createdAt?: string
+}
+
+// ── Statuts ───────────────────────────────────────────────────
+const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
+  uploaded:  { label: 'Uploadée',  color: 'bg-blue-500/15 text-blue-600' },
+  extracted: { label: 'Extraite',  color: 'bg-purple-500/15 text-purple-600' },
+  validated: { label: 'Validée',   color: 'bg-green-500/15 text-green-600' },
+  rejected:  { label: 'Rejetée',   color: 'bg-red-500/15 text-red-600' },
+}
+
+// ── Helpers ───────────────────────────────────────────────────
+function fmt(v?: number | null) {
+  if (v == null) return '—'
+  return v.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'
+}
+
+function normalizeData(raw: ExtractedData): ExtractedData {
+  return {
+    numeroFacture: raw.numeroFacture || raw.invoice_number || '',
+    fournisseur: raw.fournisseur || raw.supplier || '',
+    date: raw.date || '',
+    adresseFournisseur: raw.adresseFournisseur || '',
+    client: raw.client || '',
+    adresseClient: raw.adresseClient || '',
+    totalHT: raw.totalHT ?? raw.total_ht ?? null,
+    tva: raw.tva ?? raw.total_tva ?? null,
+    totalTTC: raw.totalTTC ?? raw.total_ttc ?? null,
+    produits: raw.produits || [],
+    rawText: raw.rawText || '',
+  }
+}
+
+// ── Composant principal ───────────────────────────────────────
 export default function InvoiceDetailPage() {
-  const router = useRouter()
   const params = useParams()
+  const router = useRouter()
   const { token } = useAuth()
-  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false)
-  const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false)
-  const [exportFormat, setExportFormat] = useState<'pdf' | 'csv' | 'json'>('pdf')
-  const [rejectionReason, setRejectionReason] = useState('')
+
+  // ✅ CONVERSION EXPLICITE : string → number
+  const invoiceId = params?.id ? Number(params.id) : undefined
+
+  const [invoice, setInvoice] = useState<InvoiceDetail | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [hasError, setHasError] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  
-  // État pour l'invoice et les données extraites (éditables)
-  const [invoice, setInvoice] = useState<typeof mockInvoices[0] | null>(null)
-  const [extractedData, setExtractedData] = useState<ExtractedData>(mockExtractedData)
-  const [confidenceScore, setConfidenceScore] = useState(90)
 
-  // Charger les données de la facture
+  const [form, setForm] = useState<ExtractedData>({})
+  const [products, setProducts] = useState<Product[]>([])
+
+  // ── Chargement de la facture ────────────────────────────
   useEffect(() => {
-    const loadInvoice = async () => {
-      if (!params.id) return
+    // ✅ VALIDATION : invoiceId doit être un nombre valide
+    if (!invoiceId || isNaN(invoiceId) || invoiceId <= 0 || !token) {
+      setHasError(true)
+      setIsLoading(false)
+      return
+    }
 
+    const fetchInvoice = async () => {
       setIsLoading(true)
-      
       try {
-        if (token) {
-          // Essayer de charger depuis l'API
-          const apiInvoice = await invoicesApi.getInvoice(Number(params.id), token)
-          
-          setInvoice({
-            id: String(apiInvoice.id),
-            fileName: apiInvoice.fileName,
-            fileSize: apiInvoice.fileSize ? `${(apiInvoice.fileSize / 1024 / 1024).toFixed(1)}MB` : 'N/A',
-            fournisseur: apiInvoice.extractedData?.fournisseur || '',
-            date: apiInvoice.extractedData?.date || apiInvoice.createdAt.split('T')[0],
-            status: apiInvoice.status,
-            totalHT: apiInvoice.extractedData?.totalHT,
-            tva: apiInvoice.extractedData?.tva,
-            totalTTC: apiInvoice.extractedData?.totalTTC,
-            confidenceScore: apiInvoice.confidenceScore,
-            createdAt: apiInvoice.createdAt,
-            extractedData: apiInvoice.extractedData ? {
-              ...apiInvoice.extractedData,
-              adresseFournisseur: apiInvoice.extractedData.adresseFournisseur || '',
-              client: apiInvoice.extractedData.client || '',
-              adresseClient: apiInvoice.extractedData.adresseClient || '',
-              produits: apiInvoice.extractedData.produits.map((p, i) => ({
-                id: String(p.id || i),
-                nom: p.nom,
-                quantite: p.quantite,
-                prixUnitaire: p.prixUnitaire,
-                total: p.total
-              }))
-            } : undefined
-          })
-          
-          if (apiInvoice.extractedData) {
-            setExtractedData({
-              ...apiInvoice.extractedData,
-              adresseFournisseur: apiInvoice.extractedData.adresseFournisseur || '',
-              client: apiInvoice.extractedData.client || '',
-              adresseClient: apiInvoice.extractedData.adresseClient || '',
-              produits: apiInvoice.extractedData.produits.map((p, i) => ({
-                id: String(p.id || i),
-                nom: p.nom,
-                quantite: p.quantite,
-                prixUnitaire: p.prixUnitaire,
-                total: p.total
-              }))
-            })
-          }
-          setConfidenceScore(apiInvoice.confidenceScore || 0)
-        } else {
-          throw new Error('No token')
+        const res = await fetch(`${API_BASE_URL}/invoices/${invoiceId}`, {
+          headers: getHeaders(token),
+        })
+
+        if (!res.ok) {
+          if (res.status === 404) throw new Error('Facture non trouvée')
+          throw new Error('Erreur serveur')
         }
-      } catch {
-        // Fallback sur les données mock
-        const mockInvoice = mockInvoices.find(inv => inv.id === params.id) || mockInvoices[0]
-        setInvoice(mockInvoice)
-        setExtractedData(mockInvoice.extractedData || mockExtractedData)
-        setConfidenceScore(mockInvoice.confidenceScore || 90)
+
+        const data: InvoiceDetail = await res.json()
+        setInvoice(data)
+
+        const normalized = normalizeData(data.extractedData || {})
+        setForm(normalized)
+        setProducts(normalized.produits || [])
+      } catch (error) {
+        console.error('Erreur chargement facture:', error)
+        setHasError(true)
+        toast.error('Impossible de charger la facture')
       } finally {
         setIsLoading(false)
       }
     }
 
-    loadInvoice()
-  }, [params.id, token])
+    fetchInvoice()
+  }, [invoiceId, token]) // ← invoiceId est maintenant un number
 
+  // ── Recalculer les totaux ───────────────────────────────
+  const recalculateTotals = (prods: Product[]) => {
+    const ht = prods.reduce((sum, p) => sum + (p.total || 0), 0)
+    const tva = form.tva != null ? form.tva : Math.round(ht * 0.2 * 100) / 100
+    const ttc = Math.round((ht + tva) * 100) / 100
+    setForm(prev => ({ ...prev, totalHT: ht, tva, totalTTC: ttc }))
+  }
+
+  // ── Modifier un produit ─────────────────────────────────
+  const updateProduct = (idx: number, field: keyof Product, value: string) => {
+    setProducts(prev => {
+      const updated = [...prev]
+      const p = { ...updated[idx] }
+      if (field === 'nom') {
+        p.nom = value
+      } else {
+        const num = parseFloat(value) || 0
+        ;(p as any)[field] = num
+        if (field === 'quantite' || field === 'prixUnitaire') {
+          p.total = Math.round(p.quantite * p.prixUnitaire * 100) / 100
+        }
+      }
+      updated[idx] = p
+      recalculateTotals(updated)
+      return updated
+    })
+  }
+
+  const addProduct = () => {
+    const newProd: Product = { nom: '', quantite: 1, prixUnitaire: 0, total: 0 }
+    const updated = [...products, newProd]
+    setProducts(updated)
+    recalculateTotals(updated)
+  }
+
+  const removeProduct = (idx: number) => {
+    const updated = products.filter((_, i) => i !== idx)
+    setProducts(updated)
+    recalculateTotals(updated)
+  }
+
+  const resetEdit = () => {
+    if (!invoice) return
+    const normalized = normalizeData(invoice.extractedData || {})
+    setForm(normalized)
+    setProducts(normalized.produits || [])
+    setIsEditing(false)
+  }
+
+  // ── Valider la facture ──────────────────────────────────
   const handleValidate = async () => {
-    if (!token || !invoice) return
-
+    if (!token || !invoiceId) return
     setIsSaving(true)
+    const corrections = { ...form, produits: products, totalHT: form.totalHT, tva: form.tva, totalTTC: form.totalTTC }
+
     try {
-      await invoicesApi.validateInvoice(Number(invoice.id), token, {
-        approved: true,
-        corrections: extractedData
+      const res = await fetch(`${API_BASE_URL}/invoices/${invoiceId}/validate`, {
+        method: 'POST',
+        headers: getHeaders(token),
+        body: JSON.stringify({ corrections }),
       })
-      toast.success('Facture validée avec succès')
-      router.push('/dashboard/history')
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setInvoice(prev => prev ? { ...prev, status: 'validated', validatedData: corrections } : prev)
+      setIsEditing(false)
+      toast.success('✅ Facture validée avec succès !')
     } catch {
       toast.error('Erreur lors de la validation')
     } finally {
@@ -167,18 +218,18 @@ export default function InvoiceDetailPage() {
     }
   }
 
+  // ── Rejeter la facture ──────────────────────────────────
   const handleReject = async () => {
-    if (!token || !invoice) return
-
+    if (!token || !invoiceId) return
     setIsSaving(true)
     try {
-      await invoicesApi.validateInvoice(Number(invoice.id), token, {
-        approved: false,
-        rejectionReason
+      const res = await fetch(`${API_BASE_URL}/invoices/${invoiceId}/reject`, {
+        method: 'POST',
+        headers: getHeaders(token),
       })
+      if (!res.ok) throw new Error()
+      setInvoice(prev => prev ? { ...prev, status: 'rejected' } : prev)
       toast.success('Facture rejetée')
-      setIsRejectDialogOpen(false)
-      router.push('/dashboard/history')
     } catch {
       toast.error('Erreur lors du rejet')
     } finally {
@@ -186,386 +237,256 @@ export default function InvoiceDetailPage() {
     }
   }
 
-  const handleSave = async () => {
-    if (!token || !invoice) return
-
-    setIsSaving(true)
-    try {
-      await invoicesApi.validateInvoice(Number(invoice.id), token, {
-        approved: false, // Just save, don't validate
-        corrections: extractedData
-      })
-      toast.success('Modifications enregistrées')
-    } catch {
-      toast.error('Erreur lors de l\'enregistrement')
-    } finally {
-      setIsSaving(false)
-    }
-  }
-
-  const handleExport = async () => {
-    if (!token || !invoice) return
-
-    try {
-      const blob = await invoicesApi.exportInvoices(token, {
-        format: exportFormat,
-        invoiceIds: [Number(invoice.id)]
-      })
-      
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `facture-${invoice.id}.${exportFormat}`
-      a.click()
-      window.URL.revokeObjectURL(url)
-      
-      setIsExportDialogOpen(false)
-      toast.success('Export téléchargé')
-    } catch {
-      toast.error('Erreur lors de l\'export')
-    }
-  }
-
-  const handleDelete = async () => {
-    if (!token || !invoice) return
-
-    try {
-      await invoicesApi.deleteInvoice(Number(invoice.id), token)
-      toast.success('Facture supprimée')
-      router.push('/dashboard/history')
-    } catch {
-      toast.error('Erreur lors de la suppression')
-    }
-  }
-
-  // Mettre à jour un champ de données extraites
-  const updateField = (field: keyof ExtractedData, value: string | number) => {
-    setExtractedData(prev => ({ ...prev, [field]: value }))
-  }
-
+  // ── États de chargement / erreur ────────────────────────
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-3 text-primary" />
+          <p className="text-muted-foreground">Chargement de la facture...</p>
+        </div>
       </div>
     )
   }
 
-  if (!invoice) {
+  if (hasError || !invoice) {
     return (
-      <div className="flex flex-col items-center justify-center h-64">
-        <p className="text-muted-foreground">Facture non trouvée</p>
-        <Button variant="outline" className="mt-4" onClick={() => router.back()}>
-          Retour
+      <div className="flex flex-col items-center justify-center min-h-[400px]">
+        <AlertCircle className="h-12 w-12 text-destructive mb-3" />
+        <h2 className="text-xl font-semibold mb-2">Facture introuvable</h2>
+        <p className="text-muted-foreground mb-4">
+          {!invoiceId || isNaN(invoiceId)
+            ? "ID de facture invalide ou manquant"
+            : "La facture demandée n'existe pas"}
+        </p>
+        <Button onClick={() => router.push('/dashboard/history')}>
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Retour à l'historique
         </Button>
       </div>
     )
   }
 
+  const statusCfg = STATUS_CONFIG[invoice.status] ?? { label: invoice.status, color: 'bg-muted text-muted-foreground' }
+
+  // ── Render ───────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">{invoice.fileName}</h1>
-            <Badge className={cn(
-              invoice.status === 'validee' && 'bg-success text-success-foreground',
-              invoice.status === 'rejetee' && 'bg-destructive text-destructive-foreground',
-              invoice.status === 'en_cours' && 'bg-warning text-warning-foreground',
-            )}>
-              {invoice.status === 'validee' && 'Traité avec succès'}
-              {invoice.status === 'rejetee' && 'Rejetée'}
-              {invoice.status === 'en_cours' && 'En cours'}
-              {invoice.status === 'en_attente' && 'En attente'}
-            </Badge>
+      {/* En-tête */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" onClick={() => router.back()}>
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <FileText className="h-6 w-6 text-primary" />
+              {invoice.fileName}
+            </h1>
+            <div className="flex items-center gap-2 mt-1">
+              <Badge className={statusCfg.color}>{statusCfg.label}</Badge>
+              <span className="text-xs text-muted-foreground">ID #{invoice.id}</span>
+              {invoice.createdAt && (
+                <span className="text-xs text-muted-foreground">
+                  · {new Date(invoice.createdAt).toLocaleDateString('fr-FR')}
+                </span>
+              )}
+            </div>
           </div>
-          <p className="text-muted-foreground">Score de confiance: {confidenceScore}%</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Re-traiter
-          </Button>
-          <Dialog open={isExportDialogOpen} onOpenChange={setIsExportDialogOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" size="sm">
-                <Download className="mr-2 h-4 w-4" />
-                Export
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Exporter la facture</DialogTitle>
-                <DialogDescription>
-                  Choisissez le format d&apos;export pour télécharger les données
-                </DialogDescription>
-              </DialogHeader>
-              <div className="py-4">
-                <Label>Format d&apos;export</Label>
-                <Select value={exportFormat} onValueChange={(v) => setExportFormat(v as 'pdf' | 'csv' | 'json')}>
-                  <SelectTrigger className="mt-2">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pdf">PDF</SelectItem>
-                    <SelectItem value="csv">CSV</SelectItem>
-                    <SelectItem value="json">JSON</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsExportDialogOpen(false)}>
-                  Annuler
+
+        {/* Boutons d'action */}
+        {invoice.status !== 'validated' && invoice.status !== 'rejected' && (
+          <div className="flex items-center gap-2">
+            {isEditing ? (
+              <>
+                <Button variant="ghost" onClick={resetEdit} disabled={isSaving}>
+                  <RotateCcw className="mr-2 h-4 w-4" /> Annuler
                 </Button>
-                <Button onClick={handleExport}>
-                  <Download className="mr-2 h-4 w-4" />
-                  Télécharger
+                <Button variant="outline" onClick={handleReject} disabled={isSaving}
+                  className="border-destructive/50 text-destructive hover:bg-destructive/5">
+                  <XCircle className="mr-2 h-4 w-4" /> Rejeter
                 </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-          <Button variant="destructive" size="sm" onClick={handleDelete}>
-            <Trash2 className="mr-2 h-4 w-4" />
-            Supprimer
-          </Button>
-        </div>
+                <Button onClick={handleValidate} disabled={isSaving}>
+                  {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                  Enregistrer et valider
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outline" onClick={handleReject} disabled={isSaving}
+                  className="border-destructive/50 text-destructive hover:bg-destructive/5">
+                  <XCircle className="mr-2 h-4 w-4" /> Rejeter
+                </Button>
+                <Button variant="outline" onClick={() => setIsEditing(true)}>
+                  <Edit3 className="mr-2 h-4 w-4" /> Corriger
+                </Button>
+                <Button onClick={handleValidate} disabled={isSaving}>
+                  {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
+                  Valider
+                </Button>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Document Preview */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Aperçu du document
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="aspect-[3/4] rounded-lg bg-muted flex items-center justify-center border">
-              <div className="text-center p-8">
-                <FileText className="h-20 w-20 text-muted-foreground/50 mx-auto mb-4" />
-                <p className="font-medium">{invoice.fileName}</p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Cliquez pour voir le document original
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Extracted Information */}
-        <div className="space-y-6">
-          {/* Confidence Score */}
+      <div className="grid gap-6 lg:grid-cols-5">
+        {/* ── Colonne gauche : aperçu document ── */}
+        <div className="lg:col-span-2 space-y-4">
           <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Score de confiance</p>
-                  <p className="text-3xl font-bold">{confidenceScore}%</p>
-                </div>
-                <div className={cn(
-                  'flex h-16 w-16 items-center justify-center rounded-full',
-                  confidenceScore >= 80 ? 'bg-success/10 text-success' : 
-                  confidenceScore >= 60 ? 'bg-warning/10 text-warning' : 
-                  'bg-destructive/10 text-destructive'
-                )}>
-                  {confidenceScore >= 80 ? (
-                    <CheckCircle className="h-8 w-8" />
-                  ) : confidenceScore >= 60 ? (
-                    <AlertTriangle className="h-8 w-8" />
-                  ) : (
-                    <XCircle className="h-8 w-8" />
-                  )}
-                </div>
+            <CardHeader><CardTitle className="text-base">Document original</CardTitle></CardHeader>
+            <CardContent>
+              <div className="aspect-[3/4] rounded-lg bg-muted border flex flex-col items-center justify-center cursor-pointer hover:bg-muted/80 transition-colors group"
+                onClick={() => invoice.filePath && window.open(`http://localhost:8000/${invoice.filePath}`, '_blank')}>
+                <FileText className="h-16 w-16 text-muted-foreground/40 group-hover:text-primary/60 transition-colors mb-3" />
+                <p className="text-sm font-medium text-center px-4 truncate max-w-full">{invoice.fileName}</p>
+                <p className="text-xs text-muted-foreground mt-1">Cliquez pour voir le document original</p>
               </div>
             </CardContent>
           </Card>
 
-          {/* Extracted Data */}
+          {/* Infos document */}
           <Card>
-            <CardHeader>
-              <CardTitle>Informations extraites</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Numéro facture</Label>
-                  <Input 
-                    value={extractedData.numeroFacture} 
-                    onChange={(e) => updateField('numeroFacture', e.target.value)}
-                    className="mt-1" 
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Date</Label>
-                  <Input 
-                    value={extractedData.date} 
-                    onChange={(e) => updateField('date', e.target.value)}
-                    className="mt-1" 
-                  />
-                </div>
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">Fournisseur</Label>
-                <Input 
-                  value={extractedData.fournisseur} 
-                  onChange={(e) => updateField('fournisseur', e.target.value)}
-                  className="mt-1" 
-                />
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">Adresse fournisseur</Label>
-                <Input 
-                  value={extractedData.adresseFournisseur} 
-                  onChange={(e) => updateField('adresseFournisseur', e.target.value)}
-                  className="mt-1" 
-                />
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">Client</Label>
-                <Input 
-                  value={extractedData.client} 
-                  onChange={(e) => updateField('client', e.target.value)}
-                  className="mt-1" 
-                />
-              </div>
+            <CardHeader><CardTitle className="text-base">Informations générales</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <InfoRow icon={<Hash className="h-4 w-4" />} label="N° Facture">
+                {isEditing ? (
+                  <Input value={form.numeroFacture || ''} onChange={e => setForm(p => ({ ...p, numeroFacture: e.target.value }))} className="h-7 text-sm" />
+                ) : <span className="font-medium">{form.numeroFacture || '—'}</span>}
+              </InfoRow>
+              <InfoRow icon={<Building2 className="h-4 w-4" />} label="Fournisseur">
+                {isEditing ? (
+                  <Input value={form.fournisseur || ''} onChange={e => setForm(p => ({ ...p, fournisseur: e.target.value }))} className="h-7 text-sm" />
+                ) : <span className="font-medium">{form.fournisseur || '—'}</span>}
+              </InfoRow>
+              <InfoRow icon={<Calendar className="h-4 w-4" />} label="Date">
+                {isEditing ? (
+                  <Input type="date" value={form.date || ''} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} className="h-7 text-sm" />
+                ) : <span className="font-medium">{form.date || '—'}</span>}
+              </InfoRow>
+              {form.client && (
+                <InfoRow icon={<Building2 className="h-4 w-4" />} label="Client">
+                  {isEditing ? (
+                    <Input value={form.client || ''} onChange={e => setForm(p => ({ ...p, client: e.target.value }))} className="h-7 text-sm" />
+                  ) : <span className="font-medium">{form.client}</span>}
+                </InfoRow>
+              )}
             </CardContent>
           </Card>
 
-          {/* Amounts */}
+          {/* Totaux */}
           <Card>
-            <CardHeader>
-              <CardTitle>Montants</CardTitle>
+            <CardHeader><CardTitle className="text-base flex items-center gap-2"><Receipt className="h-4 w-4" /> Totaux</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex justify-between items-center py-1">
+                <span className="text-sm text-muted-foreground">Total HT</span>
+                {isEditing ? (
+                  <Input type="number" value={form.totalHT ?? ''} onChange={e => setForm(p => ({ ...p, totalHT: parseFloat(e.target.value) || 0 }))} className="h-7 w-32 text-sm text-right" />
+                ) : <span className="font-medium">{fmt(form.totalHT)}</span>}
+              </div>
+              <div className="flex justify-between items-center py-1">
+                <span className="text-sm text-muted-foreground">TVA</span>
+                {isEditing ? (
+                  <Input type="number" value={form.tva ?? ''} onChange={e => setForm(p => ({ ...p, tva: parseFloat(e.target.value) || 0 }))} className="h-7 w-32 text-sm text-right" />
+                ) : <span className="font-medium">{fmt(form.tva)}</span>}
+              </div>
+              <div className="flex justify-between items-center py-2 border-t mt-1">
+                <span className="font-semibold">Total TTC</span>
+                {isEditing ? (
+                  <Input type="number" value={form.totalTTC ?? ''} onChange={e => setForm(p => ({ ...p, totalTTC: parseFloat(e.target.value) || 0 }))} className="h-7 w-32 text-sm text-right font-bold" />
+                ) : <span className="text-xl font-bold text-primary">{fmt(form.totalTTC)}</span>}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* ── Colonne droite : tableau produits ── */}
+        <div className="lg:col-span-3 space-y-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle className="flex items-center gap-2">
+                <Package className="h-5 w-5" /> Tableau des produits
+                {products.length > 0 && <Badge variant="outline" className="ml-1">{products.length} article{products.length > 1 ? 's' : ''}</Badge>}
+              </CardTitle>
+              {isEditing && <Button size="sm" variant="outline" onClick={addProduct}>+ Ajouter une ligne</Button>}
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Total HT</Label>
-                  <Input 
-                    value={extractedData.totalHT.toFixed(2)} 
-                    onChange={(e) => updateField('totalHT', parseFloat(e.target.value) || 0)}
-                    className="mt-1" 
-                  />
+              {products.length === 0 ? (
+                <div className="text-center py-10 text-muted-foreground">
+                  <Package className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">Aucun produit extrait</p>
+                  {isEditing && <Button size="sm" variant="outline" className="mt-3" onClick={addProduct}>+ Ajouter un produit</Button>}
                 </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">TVA</Label>
-                  <Input 
-                    value={extractedData.tva.toFixed(2)} 
-                    onChange={(e) => updateField('tva', parseFloat(e.target.value) || 0)}
-                    className="mt-1" 
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Total TTC</Label>
-                  <Input 
-                    value={extractedData.totalTTC.toFixed(2)} 
-                    onChange={(e) => updateField('totalTTC', parseFloat(e.target.value) || 0)}
-                    className="mt-1 font-semibold" 
-                  />
-                </div>
-              </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="min-w-[160px]">Produit</TableHead>
+                      <TableHead className="text-right w-24">Quantité</TableHead>
+                      <TableHead className="text-right w-32">Prix unitaire</TableHead>
+                      <TableHead className="text-right w-28">Total</TableHead>
+                      {isEditing && <TableHead className="w-10" />}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {products.map((prod, idx) => (
+                      <TableRow key={idx}>
+                        <TableCell>
+                          {isEditing ? (
+                            <Input value={prod.nom} onChange={e => updateProduct(idx, 'nom', e.target.value)} className="h-7 text-sm" placeholder="Nom du produit" />
+                          ) : <span className="font-medium">{prod.nom || '—'}</span>}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {isEditing ? (
+                            <Input type="number" value={prod.quantite} onChange={e => updateProduct(idx, 'quantite', e.target.value)} className="h-7 text-sm text-right w-20 ml-auto" />
+                          ) : prod.quantite}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {isEditing ? (
+                            <Input type="number" value={prod.prixUnitaire} onChange={e => updateProduct(idx, 'prixUnitaire', e.target.value)} className="h-7 text-sm text-right w-28 ml-auto" />
+                          ) : fmt(prod.prixUnitaire)}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">{fmt(prod.total)}</TableCell>
+                        {isEditing && (
+                          <TableCell>
+                            <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => removeProduct(idx)}>
+                              <XCircle className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    ))}
+                    <TableRow className="border-t-2 bg-muted/30">
+                      <TableCell colSpan={isEditing ? 3 : 3} className="font-semibold text-right">Total</TableCell>
+                      <TableCell className="text-right font-bold text-primary">{fmt(products.reduce((s, p) => s + (p.total || 0), 0))}</TableCell>
+                      {isEditing && <TableCell />}
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
+          {form.rawText && (
+            <Card>
+              <CardHeader><CardTitle className="text-sm text-muted-foreground">Texte OCR brut (extrait)</CardTitle></CardHeader>
+              <CardContent>
+                <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-mono max-h-40 overflow-y-auto bg-muted/40 rounded p-3">{form.rawText}</pre>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
+    </div>
+  )
+}
 
-      {/* Products Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Tableau des produits</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Produit</TableHead>
-                <TableHead className="text-right">Quantité</TableHead>
-                <TableHead className="text-right">Prix unitaire</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {extractedData.produits.map((product) => (
-                <TableRow key={product.id}>
-                  <TableCell className="font-medium">{product.nom}</TableCell>
-                  <TableCell className="text-right">{product.quantite}</TableCell>
-                  <TableCell className="text-right">{product.prixUnitaire.toFixed(2)} €</TableCell>
-                  <TableCell className="text-right font-medium">{product.total.toFixed(2)} €</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      {/* Alerts */}
-      {confidenceScore < 80 && (
-        <Card className="border-warning">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-warning">
-              <AlertTriangle className="h-5 w-5" />
-              Alertes
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Certaines données ont un score de confiance faible et nécessitent une vérification manuelle.
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Action Buttons */}
-      <div className="flex items-center justify-end gap-4">
-        <Button variant="outline" onClick={() => router.back()}>
-          Annuler
-        </Button>
-        
-        {/* Reject Dialog */}
-        <Dialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
-          <DialogTrigger asChild>
-            <Button variant="destructive">
-              <XCircle className="mr-2 h-4 w-4" />
-              Rejeter
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Rejeter la facture</DialogTitle>
-              <DialogDescription>
-                Veuillez indiquer la raison du rejet
-              </DialogDescription>
-            </DialogHeader>
-            <div className="py-4">
-              <Label>Raison du rejet</Label>
-              <Textarea 
-                className="mt-2" 
-                placeholder="Ex: Données illisibles, montants incorrects..."
-                value={rejectionReason}
-                onChange={(e) => setRejectionReason(e.target.value)}
-              />
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsRejectDialogOpen(false)}>
-                Annuler
-              </Button>
-              <Button variant="destructive" onClick={handleReject} disabled={isSaving}>
-                {isSaving ? 'En cours...' : 'Confirmer le rejet'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        <Button onClick={handleValidate} disabled={isSaving}>
-          <CheckCircle className="mr-2 h-4 w-4" />
-          {isSaving ? 'En cours...' : 'Valider'}
-        </Button>
-        <Button variant="secondary" onClick={handleSave} disabled={isSaving}>
-          <Save className="mr-2 h-4 w-4" />
-          {isSaving ? 'En cours...' : 'Enregistrer'}
-        </Button>
-      </div>
+// ── Composant InfoRow ─────────────────────────────────────────
+function InfoRow({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">{icon}{label}</div>
+      {children}
     </div>
   )
 }
