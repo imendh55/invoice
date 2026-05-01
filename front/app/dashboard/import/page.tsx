@@ -357,7 +357,7 @@ export default function ImportPage() {
                             size="sm"
                             variant={file.status === 'uploaded' ? 'default' : 'outline'}
                             onClick={() => handleProcess(file.localId)}
-                            disabled={file.status === 'uploading'}
+                            disabled={isUploading}
                           >
                             {file.status === 'uploaded' ? 'Traiter' : 'Uploader'}
                           </Button>

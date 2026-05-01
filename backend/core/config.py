@@ -6,8 +6,11 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440   # 24 heures
 
-    # Database (SQLite pour le moment)
+    # Database
     DATABASE_URL: str = "sqlite:///./invoice_ai.db"
+
+    # Gemini
+    GEMINI_API_KEY: str = ""
 
     class Config:
         env_file = ".env"
