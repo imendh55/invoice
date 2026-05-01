@@ -13,23 +13,54 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+
 class LoginRequest(BaseModel):
     email: str
     password: str
+
 
 class RegisterRequest(BaseModel):
     nom: str
     prenom: str
     email: str
     password: str
+    dateAnniversaire: str
+    cin: str
+
+
+class UpdateProfileRequest(BaseModel):
+    nom: str
+    prenom: str
     dateAnniversaire: str | None = None
     cin: str | None = None
 
+
+class ChangePasswordRequest(BaseModel):
+    currentPassword: str
+    newPassword: str
+
+
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+    )
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def user_to_dict(user: User) -> dict:
+    return {
+        "id":               user.id,
+        "nom":              user.nom,
+        "prenom":           user.prenom,
+        "email":            user.email,
+        "role":             user.role,
+        "dateAnniversaire": user.dateAnniversaire,
+        "cin":              user.cin,
+        "createdAt":        user.created_at.isoformat(),
+    }
+
 
 @router.post("/register")
 def register(user: RegisterRequest, db: Session = Depends(get_db)):
@@ -44,26 +75,20 @@ def register(user: RegisterRequest, db: Session = Depends(get_db)):
         nom=user.nom,
         prenom=user.prenom,
         hashed_password=hashed,
-        dateAnniversaire=user.dateAnniversaire,  # ✅ Espace supprimé
+        dateAnniversaire=user.dateAnniversaire,
         cin=user.cin,
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    token = create_access_token({"sub": user.email})  # ✅ Espace supprimé
+    token = create_access_token({"sub": user.email})
     return {
-        "access_token": token,  # ✅ Espace supprimé
-        "token_type": "bearer",  # ✅ Espace supprimé
-        "user": {  # ✅ Espace supprimé
-            "id": new_user.id,  # ✅ Espace supprimé
-            "nom": new_user.nom,  # ✅ Espace supprimé
-            "prenom": new_user.prenom,  # ✅ Espace supprimé
-            "email": new_user.email,  # ✅ Espace supprimé
-            "role": new_user.role,  # ✅ Espace supprimé
-            "createdAt": new_user.created_at.isoformat(),  # ✅ Espace supprimé
-        }
+        "access_token": token,
+        "token_type":   "bearer",
+        "user":         user_to_dict(new_user),
     }
+
 
 @router.post("/login")
 def login(user: LoginRequest, db: Session = Depends(get_db)):
@@ -71,33 +96,66 @@ def login(user: LoginRequest, db: Session = Depends(get_db)):
     if not db_user or not pwd_context.verify(user.password, db_user.hashed_password):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
 
-    token = create_access_token({"sub": user.email})  # ✅ Espace supprimé
+    token = create_access_token({"sub": user.email})
     return {
-        "access_token": token,  # ✅ Espace supprimé
-        "token_type": "bearer",  # ✅ Espace supprimé
-        "user": {  # ✅ Espace supprimé
-            "id": db_user.id,  # ✅ Espace supprimé
-            "nom": db_user.nom,  # ✅ Espace supprimé
-            "prenom": db_user.prenom,  # ✅ Espace supprimé
-            "email": db_user.email,  # ✅ Espace supprimé
-            "role": db_user.role,  # ✅ Espace supprimé
-            "createdAt": db_user.created_at.isoformat(),  # ✅ Espace supprimé
-        }
+        "access_token": token,
+        "token_type":   "bearer",
+        "user":         user_to_dict(db_user),
     }
 
-@router.get("/me")  # ✅ Espace supprimé
+
+@router.get("/me")
 def get_me(
     db: Session = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
-    db_user = db.query(User).filter(User.email == current_user).first()  # ✅ "Use r" corrigé
+    db_user = db.query(User).filter(User.email == current_user).first()
     if not db_user:
-        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")  # ✅ Espace supprimé
-    return {
-        "id": db_user.id,  # ✅ Espace supprimé
-        "nom": db_user.nom,  # ✅ Espace supprimé
-        "prenom": db_user.prenom,  # ✅ Espace supprimé
-        "email": db_user.email,  # ✅ Espace supprimé
-        "role": db_user.role,  # ✅ Espace supprimé
-        "createdAt": db_user.created_at.isoformat(),  # ✅ Espace supprimé
-    }
+        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
+    return user_to_dict(db_user)
+
+
+@router.put("/profile")
+def update_profile(
+    data: UpdateProfileRequest,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    db_user = db.query(User).filter(User.email == current_user).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
+
+    db_user.nom = data.nom
+    db_user.prenom = data.prenom
+    if data.dateAnniversaire is not None:
+        db_user.dateAnniversaire = data.dateAnniversaire
+    if data.cin is not None:
+        db_user.cin = data.cin
+
+    db.commit()
+    db.refresh(db_user)
+    return user_to_dict(db_user)
+
+
+@router.put("/password")
+def change_password(
+    data: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    db_user = db.query(User).filter(User.email == current_user).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
+
+    if not pwd_context.verify(data.currentPassword, db_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Mot de passe actuel incorrect")
+
+    if len(data.newPassword) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail="Le nouveau mot de passe doit contenir au moins 6 caractères"
+        )
+
+    db_user.hashed_password = pwd_context.hash(data.newPassword)
+    db.commit()
+    return {"message": "Mot de passe modifié avec succès"}

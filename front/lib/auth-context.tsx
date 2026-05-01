@@ -1,5 +1,5 @@
 'use client'
-
+import type { RegisterRequest } from './api/auth'
 import {
   createContext,
   useContext,

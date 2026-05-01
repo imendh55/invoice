@@ -4,20 +4,24 @@ from infrastructure.database.models import InvoiceModel
 
 def validate_invoice(db: Session, invoice_id: int, corrected_data: dict):
     """
-    Valide et met à jour les données corrigées par l'utilisateur.
-    ✅ Utilise un UPDATE direct pour éviter la création d'un doublon.
+    Valide ou rejette une facture selon les données corrigées.
+    Si corrected_data contient '_status': 'rejected', on rejette.
     """
     db_invoice = db.query(InvoiceModel).filter(InvoiceModel.id == invoice_id).first()
-
     if not db_invoice:
         return None
 
-    db_invoice.validated_data = corrected_data
-    db_invoice.status = "validated"
+    # Détecter si c'est un rejet
+    internal_status = corrected_data.pop('_status', None)
+    if internal_status == 'rejected':
+        db_invoice.status = 'rejected'
+    else:
+        db_invoice.validated_data = corrected_data
+        db_invoice.status = 'validated'
+
     db.commit()
     db.refresh(db_invoice)
 
-    # Retourner au format camelCase pour le frontend
     return {
         "id":            db_invoice.id,
         "fileName":      db_invoice.filename,

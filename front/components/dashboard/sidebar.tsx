@@ -1,3 +1,5 @@
+// components/dashboard/sidebar.tsx
+
 'use client'
 
 import Link from 'next/link'
@@ -5,6 +7,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Upload, History, Settings,
   Users, FileText, ScrollText, LogOut, ChevronDown, Shield,
+  BarChart3,  // ← NOUVELLE ICÔNE
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-context'
@@ -17,9 +20,10 @@ const userNavItems = [
 ]
 
 const adminNavItems = [
-  { href: '/dashboard/admin',       label: 'Dashboard Admin', icon: LayoutDashboard },
-  { href: '/dashboard/admin/users', label: 'Utilisateurs',    icon: Users },
-  { href: '/dashboard/admin/logs',  label: 'Logs système',    icon: ScrollText },
+  { href: '/dashboard/admin',          label: 'Dashboard Admin', icon: LayoutDashboard },
+  { href: '/dashboard/admin/stats',    label: 'Statistiques Globales', icon: BarChart3 },   // ← AJOUTÉ
+  { href: '/dashboard/admin/users',    label: 'Utilisateurs',    icon: Users },
+  { href: '/dashboard/admin/logs',     label: 'Logs système',    icon: ScrollText },
 ]
 
 export function Sidebar() {

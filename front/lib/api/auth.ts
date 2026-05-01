@@ -1,7 +1,4 @@
-// lib/api/auth.ts
 import { API_BASE_URL, getHeaders, handleApiResponse } from './config'
-
-// ====================== TYPES ======================
 
 export interface LoginRequest {
   email: string
@@ -13,6 +10,20 @@ export interface RegisterRequest {
   prenom: string
   email: string
   password: string
+  dateAnniversaire: string
+  cin: string
+}
+
+export interface UpdateProfileRequest {
+  nom: string
+  prenom: string
+  dateAnniversaire?: string
+  cin?: string
+}
+
+export interface ChangePasswordRequest {
+  currentPassword: string
+  newPassword: string
 }
 
 export interface UserProfile {
@@ -21,7 +32,9 @@ export interface UserProfile {
   prenom: string
   email: string
   role: 'admin' | 'user'
-  createdAt: string  // ✅ camelCase — correspond à ce que retourne le backend
+  dateAnniversaire?: string
+  cin?: string
+  createdAt: string
 }
 
 export interface AuthResponse {
@@ -30,24 +43,15 @@ export interface AuthResponse {
   user: UserProfile
 }
 
-// ====================== API CALLS ======================
-
-// POST /api/auth/login
 export async function login(credentials: LoginRequest): Promise<AuthResponse> {
-  // ✅ JSON — le backend FastAPI attend LoginRequest (Pydantic), pas OAuth2 form-data
   const response = await fetch(`${API_BASE_URL}/auth/login`, {
     method: 'POST',
-    headers: getHeaders(),   // Content-Type: application/json
-    body: JSON.stringify({
-      email: credentials.email,
-      password: credentials.password,
-    }),
+    headers: getHeaders(),
+    body: JSON.stringify(credentials),
   })
-
   return handleApiResponse<AuthResponse>(response)
 }
 
-// POST /api/auth/register
 export async function register(userData: RegisterRequest): Promise<AuthResponse> {
   const response = await fetch(`${API_BASE_URL}/auth/register`, {
     method: 'POST',
@@ -57,7 +61,6 @@ export async function register(userData: RegisterRequest): Promise<AuthResponse>
   return handleApiResponse<AuthResponse>(response)
 }
 
-// GET /api/auth/me
 export async function getMe(token: string): Promise<UserProfile> {
   const response = await fetch(`${API_BASE_URL}/auth/me`, {
     method: 'GET',
@@ -66,12 +69,33 @@ export async function getMe(token: string): Promise<UserProfile> {
   return handleApiResponse<UserProfile>(response)
 }
 
-// POST /api/auth/logout (fire & forget — pas de route backend requise)
+export async function updateProfile(
+  token: string,
+  data: UpdateProfileRequest
+): Promise<UserProfile> {
+  const response = await fetch(`${API_BASE_URL}/auth/profile`, {
+    method: 'PUT',
+    headers: getHeaders(token),
+    body: JSON.stringify(data),
+  })
+  return handleApiResponse<UserProfile>(response)
+}
+
+export async function changePassword(
+  token: string,
+  data: ChangePasswordRequest
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/auth/password`, {
+    method: 'PUT',
+    headers: getHeaders(token),
+    body: JSON.stringify(data),
+  })
+  return handleApiResponse<void>(response)
+}
+
 export async function logout(token: string): Promise<void> {
   await fetch(`${API_BASE_URL}/auth/logout`, {
     method: 'POST',
     headers: getHeaders(token),
-  }).catch(() => {
-    // Ignorer les erreurs réseau au logout
-  })
+  }).catch(() => {})
 }
