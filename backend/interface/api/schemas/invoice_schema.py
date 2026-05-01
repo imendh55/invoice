@@ -7,11 +7,21 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 
+# ==================== SCHÉMA FEEDBACK/VALIDATION ====================
+
+class FeedbackRequest(BaseModel):
+    """Schéma pour valider/corriger une facture."""
+    corrections: Dict[str, Any] = Field(default_factory=dict, description="Données corrigées par l'utilisateur")
+    comment: Optional[str] = Field(None, description="Commentaire optionnel")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # ==================== SCHÉMAS DE BASE ====================
 
 class InvoiceBase(BaseModel):
     """Champs communs pour les factures."""
-    file_name: str = Field(..., min_length=1, max_length=255, description="Nom du fichier")
+    file_name: Optional[str] = Field(None, min_length=1, max_length=255, description="Nom du fichier")
     file_path: Optional[str] = Field(None, description="Chemin du fichier")
     file_size: Optional[int] = Field(None, ge=0, description="Taille en octets")
     mime_type: Optional[str] = Field(None, description="Type MIME du fichier")
@@ -40,7 +50,6 @@ class InvoiceBase(BaseModel):
 
 class InvoiceCreate(InvoiceBase):
     """Schéma pour créer une nouvelle facture."""
-    # Tous les champs sont optionnels sauf file_name
     file_name: str = Field(..., min_length=1, max_length=255)
 
     @field_validator('currency')
@@ -65,7 +74,6 @@ class InvoiceUpload(BaseModel):
 
 class InvoiceUpdate(BaseModel):
     """Schéma pour mettre à jour une facture existante."""
-    # Tous les champs sont optionnels (PATCH)
     file_name: Optional[str] = Field(None, min_length=1, max_length=255)
     file_path: Optional[str] = None
     supplier_name: Optional[str] = None
@@ -91,7 +99,7 @@ class InvoiceResponse(InvoiceBase):
     id: int = Field(..., description="ID unique de la facture")
     user_id: Optional[int] = Field(None, description="ID de l'utilisateur propriétaire")
 
-    created_at: datetime = Field(..., description="Date de création")
+    created_at: Optional[datetime] = Field(None, description="Date de création")
     updated_at: Optional[datetime] = Field(None, description="Date de dernière modification")
 
     extracted_data: Optional[Dict[str, Any]] = Field(None, description="Données brutes extraites par OCR")
